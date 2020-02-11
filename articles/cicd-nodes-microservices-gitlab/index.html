@@ -1,0 +1,53 @@
+<!doctype html><html><head><title></title><meta name=title content="Fat codes"><meta name=description content="Personal Blog about software engineering, microservices and distributed systems"><meta property="og:type" content="website"><meta property="og:url" content="https://www.fat.codes/"><meta property="og:title" content="Fat codes"><meta property="og:description" content="Personal Blog about software engineering, microservices and distributed systems"><meta property="og:image" content="https://pbs.twimg.com/profile_images/977527947509760001/snSo28Ed_400x400.jpg"><meta property="twitter:card" content="summary_large_image"><meta property="twitter:url" content="https://www.fat.codes/"><meta property="twitter:title" content="Fat codes"><meta property="twitter:description" content="Personal Blog about software engineering, microservices and distributed systems"><meta property="twitter:image" content="https://pbs.twimg.com/profile_images/977527947509760001/snSo28Ed_400x400.jpg"><script async src="https://www.googletagmanager.com/gtag/js?id=UA-22994628-9"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}
+gtag('js',new Date());gtag('config','UA-22994628-9');</script><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no"><link rel=stylesheet href=https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css integrity=sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB crossorigin=anonymous><link href="https://fonts.googleapis.com/css?family=Ubuntu|Ubuntu+Mono" rel=stylesheet><title>CI/CD for NodeJS Microservices with Gitlab</title><link rel=stylesheet href=/css/stylesheet.css></head><body><div class=container-fluid><nav class="navbar navbar-expand-md navbar-light"><span class="navbar-brand mb-0 h1"></span><button class=navbar-toggler type=button data-toggle=collapse data-target=#navbarNavAltMarkup aria-controls=navbarNav aria-expanded=false aria-label="Toggle Navigation" name=button>
+<span class=navbar-toggler-icon></span></button><div class="collapse navbar-collapse" id=navbarNavAltMarkup><div class=navbar-nav><a class="nav-item nav-link" href=/>Home</a>
+<a class="nav-item nav-link" href=https://github.com/fatmatto target=_blank>GitHub</a>
+<a class="nav-item nav-link" href=https://gitlab.com/fatmatto target=_blank>GitLab</a>
+<a class="nav-item nav-link" href=/about/>About</a></div></div></nav><section id=page-title><h1><a href=/>Fat Codes</a></h1><span id=author-name><h6>Software engineering related ramblings by <a href=/about/ class=link>fat</a></h6></span></section><div class=blog-post><h1 class=blog-post-title><span>CI/CD for NodeJS Microservices with Gitlab</span></h1><div class=blog-post-subheader><time>25 Jul 2019</time></div><div class=blog-post-content><p>At <a href=https://www.apio.cc>Apio</a> we write <strong>a lot</strong> of microservices, we have a main platform on which our customers can interact with their IoT fleet, but we also have more vertical platforms like the Smart Lighting one for public lighting or the Smart Industry one for controlling production machines.</p><p>To handle this amount of microservices we needed to establish some sort of standard path for the whole microservice lifecycle, from design to deployment. In this post I will focus on the last part, deployment.</p><p><strong>TLDR</strong>: We write mostly NodeJS HTTP microservices, attach a .gitlab-ci.yml file to the git repository, run every needed test and then, if the commit is a release, we build a docker image of that release.</p><p>Our average .gitlab-ci file looks like this</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-yaml data-lang=yaml><span style=color:#66d9ef>stages</span>:
+  - test
+  - build
+  
+
+<span style=color:#66d9ef>build</span>:
+  <span style=color:#66d9ef>stage</span>: build
+  <span style=color:#66d9ef>only</span>:
+    - tags
+  <span style=color:#66d9ef>image</span>:
+    <span style=color:#66d9ef>name</span>: gcr.io/kaniko-project/executor:debug
+    <span style=color:#66d9ef>entrypoint</span>: [<span style=color:#e6db74>&#34;&#34;</span>]
+  <span style=color:#66d9ef>script</span>:
+    - echo <span style=color:#e6db74>&#34;{\&#34;auths\&#34;:{\&#34;$CI_REGISTRY\&#34;:{\&#34;username\&#34;:\&#34;$CI_REGISTRY_USER\&#34;,\&#34;password\&#34;:\&#34;$CI_REGISTRY_PASSWORD\&#34;}}}&#34;</span> &gt; /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+
+
+<span style=color:#66d9ef>lint</span>:
+  <span style=color:#66d9ef>image</span>: node:lts-alpine
+  <span style=color:#66d9ef>stage</span>: test
+  <span style=color:#66d9ef>script</span>:
+    - npm ci
+    - npm run lint
+
+<span style=color:#66d9ef>audit</span>:
+  <span style=color:#66d9ef>image</span>: node:lts-alpine
+  <span style=color:#66d9ef>stage</span>: test
+  <span style=color:#66d9ef>script</span>:
+    - npm audit
+    
+<span style=color:#66d9ef>test</span>:
+  <span style=color:#66d9ef>image</span>: node:lts-alpine
+  <span style=color:#66d9ef>stage</span>: test
+  <span style=color:#66d9ef>script</span>:
+    - npm ci
+    - npm i -g mocha nyc
+    - npm run test
+
+</code></pre></div><p>Now you might say &ldquo;Dude there&rsquo;s no deployment code in there!&rdquo; and you would be almost right.
+Due to the nature of our products we have several environments, around one per client and some of them have <strong>prod</strong> and <strong>test</strong> sub environments. Sometimes N environments out of the total T needs to stick to an older version of a service until it dependent services get updated too. For this reason we tend to be selective on which environments can get automatic updates.</p><p>But how do we handle automatic updates? Well, since we extensively use docker, we found <a href=https://github.com/containrrr/watchtower>Watchtower</a> to be very useful. Watchtower can run as a docker container on your hosts and it will continuously look for updated images, when it finds new images for the containers you want to update automatically, it will pull the new image and replace the old container with a new one.</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-bash data-lang=bash>docker login &lt;your private registry url&gt;
+sudo docker run -d   <span style=color:#ae81ff>\
+</span><span style=color:#ae81ff></span>    --name watchtower  <span style=color:#ae81ff>\
+</span><span style=color:#ae81ff></span>    -v /root/.docker/config.json:/config.json  <span style=color:#ae81ff>\
+</span><span style=color:#ae81ff></span>    -v /var/run/docker.sock:/var/run/docker.sock <span style=color:#ae81ff>\
+</span><span style=color:#ae81ff></span>    containrrr/watchtower
+</code></pre></div><p>Everytime we publish a new tag for one of our microservices, a new docker image is built and published to the registry. Our environments which are in auto-update mode thanks to Watchtower get an automatic upgrade of the microservice.</p><p>If something goes wrong, we would notice thanks to our monitoring system (<a href=https://www.prometheus.io>prometheus</a> + <a href=https://www.jaegertracing.io/>jaeger</a>) + error reporting system (<a href=https://sentry.io/welcome/>Sentry</a> deployment)</p></div></div><div><div id=disqus_thread></div><script type=application/javascript>var disqus_config=function(){};(function(){if(["localhost","127.0.0.1"].indexOf(window.location.hostname)!=-1){document.getElementById('disqus_thread').innerHTML='Disqus comments not available by default when the website is previewed locally.';return;}
+var d=document,s=d.createElement('script');s.async=true;s.src='//'+"fat-codes"+'.disqus.com/embed.js';s.setAttribute('data-timestamp',+new Date());(d.head||d.body).appendChild(s);})();</script><noscript>Please enable JavaScript to view the <a href=https://disqus.com/?ref_noscript>comments powered by Disqus.</a></noscript><a href=https://disqus.com class=dsq-brlink>comments powered by <span class=logo-disqus>Disqus</span></a></div><footer><hr><small>&copy; 2020 fat.
+Powered by <a href=https://gohugo.io/ target=_blank>Hugo</a>.</small></footer></div><script src=https://code.jquery.com/jquery-3.3.1.slim.min.js integrity=sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo crossorigin=anonymous></script><script src=https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js integrity=sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49 crossorigin=anonymous></script><script src=https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js integrity=sha384-smHYKdLADwkXOn1EmN1qk/HfnUcbVRZyYmZ4qpPea6sjB/pTJ0euyQp0Mk8ck+5T crossorigin=anonymous></script></body></html>
